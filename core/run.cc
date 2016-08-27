@@ -3,11 +3,12 @@
 namespace osv {
 
 std::shared_ptr<osv::application> run(std::string path,
-                                 std::vector<std::string> args,
-                                 int* return_code)
+                     std::vector<std::string> args,
+                     int* return_code,
+                     bool new_program,
+                     const std::unordered_map<std::string, std::string> *env)
 {
-    auto app = osv::application::run(path, args);
-    app->join();
+    auto app = osv::application::run_and_join(path, args, new_program, env);
     if (return_code) {
         *return_code = app->get_return_code();
     }

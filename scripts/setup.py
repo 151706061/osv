@@ -27,43 +27,57 @@ class Fedora(object):
                 'qemu-system-x86', 'libvirt', 'maven',
                 'ant', 'autoconf', 'automake', 'boost-static', 'genromfs', 'libtool',
                 'flex', 'bison', 'maven-shade-plugin', 'python-dpkt', 'tcpdump', 'gdb',
-                'gnutls-utils', 'openssl', 'python-requests', 'p11-kit', 'patch', 'wget',
+                'gnutls-utils', 'openssl', 'p11-kit', 'patch', 'wget',
                 'unzip', 'ncurses', 'ncurses-devel', 'libstdc++-static', 'openssl-libs',
-                'openssl-devel', 'libedit-devel'
+                'openssl-devel', 'libedit-devel', 'yaml-cpp-devel'
                 ]
     ec2_packages = standard_ec2_packages
     test_packages = ['openssl-devel']
     ec2_post_install = standard_ec2_post_install
 
     class Fedora_19(object):
-        packages = ['java-1.7.0-openjdk']
+        packages = ['java-1.7.0-openjdk', 'python-requests']
         ec2_packages = []
         test_packages = []
         ec2_post_install = None
         version = '19'
 
     class Fedora_20(object):
-        packages = ['java-1.7.0-openjdk']
+        packages = ['java-1.7.0-openjdk', 'python-requests']
         ec2_packages = []
         test_packages = []
         ec2_post_install = None
         version = '20'
 
     class Fedora_21(object):
-        packages = ['java-1.7.0-openjdk']
+        packages = ['java-1.7.0-openjdk', 'python-requests']
         ec2_packages = []
         test_packages = []
         ec2_post_install = None
         version = '21'
 
     class Fedora_22(object):
-        packages = ['java-1.8.0-openjdk']
+        packages = ['java-1.8.0-openjdk', 'python-requests']
         ec2_packages = []
         test_packages = []
         ec2_post_install = None
         version = '22'
 
-    versions = [Fedora_19, Fedora_20, Fedora_21, Fedora_22]
+    class Fedora_23(object):
+        packages = ['java-1.8.0-openjdk', 'python2-requests']
+        ec2_packages = []
+        test_packages = []
+        ec2_post_install = None
+        version = '23'
+
+    class Fedora_24(object):
+        packages = ['java-1.8.0-openjdk', 'python2-requests']
+        ec2_packages = []
+        test_packages = []
+        ec2_post_install = None
+        version = '24'
+
+    versions = [Fedora_19, Fedora_20, Fedora_21, Fedora_22, Fedora_23, Fedora_24]
 
 class RHELbased(Fedora):
     name = ['Scientific Linux', 'NauLinux', 'CentOS Linux',
@@ -86,7 +100,7 @@ class Debian(object):
                 'libmaven-shade-plugin-java', 'tcpdump', 'gdb', 'gawk',
                 'gnutls-bin', 'openssl', 'python-requests', 'python-dpkt',
                 'qemu-system-x86', 'qemu-utils', 'lib32stdc++-4.9-dev',
-                'p11-kit', 'libssl-dev', 'libedit-dev']
+                'p11-kit', 'libssl-dev', 'libedit-dev', 'libncurses5-dev']
     ec2_packages = standard_ec2_packages
     test_packages = ['libssl-dev', 'zip']
     ec2_post_install = None
@@ -107,11 +121,19 @@ class Ubuntu(object):
                 'libtool', 'openjdk-7-jdk', 'ant', 'qemu-utils', 'maven',
                 'libmaven-shade-plugin-java', 'python-dpkt', 'tcpdump', 'gdb', 'qemu-system-x86',
                 'gawk', 'gnutls-bin', 'openssl', 'python-requests', 'p11-kit', 'g++-multilib',
-                'libssl-dev', 'libedit-dev', 'curl', 'libvirt-bin'
+                'libssl-dev', 'libedit-dev', 'curl', 'libvirt-bin',
+                'libncurses5-dev', 'libyaml-cpp-dev'
                 ]
     ec2_packages = standard_ec2_packages
     test_packages = ['libssl-dev', 'zip']
     ec2_post_install = None
+
+    class Ubuntu_15_04(object):
+        packages = []
+        ec2_packages = ['ec2-api-tools', 'awscli']
+        test_packages = []
+        ec2_post_install = None
+        version = '15.04'
 
     class Ubuntu_14_04(object):
         packages = []
@@ -127,7 +149,7 @@ class Ubuntu(object):
         ec2_post_install = standard_ec2_post_install
         version = '13.10'
 
-    versions = [Ubuntu_14_04, Ubuntu_13_10]
+    versions = [Ubuntu_15_04, Ubuntu_14_04, Ubuntu_13_10]
 
 distros = [
            Debian(),

@@ -31,12 +31,15 @@
 #include <osv/spinlock.h>
 #include <osv/rwlock.h>
 
+#include "pthread.hh"
+
 namespace pthread_private {
 
     const unsigned tsd_nkeys = PTHREAD_KEYS_MAX;
 
     __thread void* tsd[tsd_nkeys];
     __thread pthread_t current_pthread;
+    __thread int cancel_state = PTHREAD_CANCEL_ENABLE;
 
     __attribute__ ((init_priority ((int)init_prio::pthread))) mutex tsd_key_mutex;
     __attribute__ ((init_priority ((int)init_prio::pthread))) std::vector<bool>
@@ -73,7 +76,6 @@ namespace pthread_private {
         pthread_t to_libc();
         int join(void** retval);
         void* _retval;
-        // must be initialized last
         sched::thread _thread;
     private:
         sched::thread::stack_info allocate_stack(thread_attr attr);
@@ -147,6 +149,8 @@ namespace pthread_private {
 
     pthread* pthread::from_libc(pthread_t p)
     {
+        static_assert(sizeof(pthread_t) == sizeof(pthread*),
+            "pthread_t is not the same size as pthread*");
         return reinterpret_cast<pthread*>(p);
     }
 
@@ -660,9 +664,20 @@ int pthread_attr_getscope(pthread_attr_t *attr, int *scope)
     return 0;
 }
 
+// Set cancelability state of current thread.
+// For spec, please refer
+// http://pubs.opengroup.org/onlinepubs/9699919799/functions/pthread_setcancelstate.html
 int pthread_setcancelstate(int state, int *oldstate)
 {
-    WARN_STUBBED();
+    if (state != PTHREAD_CANCEL_ENABLE &&
+        state != PTHREAD_CANCEL_DISABLE) {
+        return EINVAL;
+    }
+    if (oldstate) {
+        // Gather current cancel state, if requested.
+        (*oldstate) = cancel_state;
+    }
+    cancel_state = state;
     return 0;
 }
 
@@ -925,22 +940,18 @@ int pthread_attr_setaffinity_np(pthread_attr_t *attr, size_t cpusetsize,
     return 0;
 }
 
-int pthread_setaffinity_np(pthread_t thread, size_t cpusetsize,
+static int setaffinity(sched::thread* t, size_t cpusetsize,
         const cpu_set_t *cpuset)
 {
-    if (thread != pthread_self()) {
-        WARN_STUBBED();
-        return EINVAL;
-    }
-    int count = CPU_COUNT(cpuset);
+    int count = CPU_COUNT_S(cpusetsize, cpuset);
     if (count == 0) {
         // Having a cpuset with no CPUs in it is invalid.
         return EINVAL;
     } else if (count == 1) {
-        for (size_t i = 0; i < __CPU_SETSIZE; i++) {
+        for (size_t i = 0; i < cpusetsize * 8; i++) {
             if (CPU_ISSET(i, cpuset)) {
                 if (i < sched::cpus.size()) {
-                    sched::thread::pin(sched::cpus[i]);
+                    sched::thread::pin(t, sched::cpus[i]);
                     break;
                 } else {
                     return EINVAL;
@@ -955,39 +966,89 @@ int pthread_setaffinity_np(pthread_t thread, size_t cpusetsize,
     return 0;
 }
 
+int pthread_setaffinity_np(pthread_t thread, size_t cpusetsize,
+        const cpu_set_t *cpuset)
+{
+    sched::thread *t = &pthread::from_libc(thread)->_thread;
+    return setaffinity(t, cpusetsize, cpuset);
+}
+
 int sched_setaffinity(pid_t pid, size_t cpusetsize,
         cpu_set_t *cpuset)
 {
-    if (pid != 0) {
-        WARN_STUBBED();
-        return EINVAL;
+    sched::thread *t;
+    if (pid == 0) {
+        t = sched::thread::current();
+    } else {
+        t = sched::thread::find_by_id(pid);
+        if (!t) {
+            errno = ESRCH;
+            return -1;
+        }
+        // TODO: After the thread was found, if it exits the code below
+        // may crash. Perhaps we should have a version of find_by_id(),
+        // with_thread_by_id(pid, func), which holds thread_map_mutex while
+        // func runs.
     }
-    return pthread_setaffinity_np(pthread_self(), cpusetsize, cpuset);
+    int err = setaffinity(t, cpusetsize, cpuset);
+    if (err) {
+        errno = err;
+        return -1;
+    }
+    return 0;
 }
 
-int pthread_getaffinity_np(const pthread_t thread, size_t cpusetsize,
+static int getaffinity(const sched::thread *t, size_t cpusetsize,
         cpu_set_t *cpuset)
 {
     if (sched::cpus.size() > cpusetsize * 8) {
         // not enough room in cpuset
         return EINVAL;
     }
-    sched::thread &t = pthread::from_libc(thread)->_thread;
     // Currently OSv does not have a real notion of a list of allowable
-    // CPUs for a thread, as Linux does. The closest feature we have in OSv is
-    // the knowledge of whether *right now* the thread is pinned to a single
-    // CPU, and if not it can run on all cpus. Note that this thread (if not
-    // the current thread) might be only temporarily pinned - e.g. inside a
-    // migration_lock while accessing a per-cpu variable.
-    // FIXME: For better support of this feature, we'll need to add
-    // a per-thread cpuset, separate from _migration_lock_counter.
+    // CPUs for a thread, as Linux does, but we have the notion of pinning
+    // the thread to a single CPU. Note that if the CPU is only temporarily
+    // bound to a CPU with a migration_lock (e.g., while accessing a per-cpu
+    // variable), it is not considered pinned.
     memset(cpuset, 0, cpusetsize);
-    if (t.migratable()) {
+    if (!t->pinned()) {
         for (unsigned i = 0; i < sched::cpus.size(); i++) {
             CPU_SET(i, cpuset);
         }
     } else {
-        CPU_SET(t.tcpu()->id, cpuset);
+        CPU_SET(t->tcpu()->id, cpuset);
+    }
+    return 0;
+}
+
+int pthread_getaffinity_np(const pthread_t thread, size_t cpusetsize,
+        cpu_set_t *cpuset)
+{
+    const sched::thread *t = &pthread::from_libc(thread)->_thread;
+    return getaffinity(t, cpusetsize, cpuset);
+}
+
+int sched_getaffinity(pid_t pid, size_t cpusetsize,
+        cpu_set_t *cpuset)
+{
+    sched::thread *t;
+    if (pid == 0) {
+        t = sched::thread::current();
+    } else {
+        t = sched::thread::find_by_id(pid);
+        if (!t) {
+            errno = ESRCH;
+            return -1;
+        }
+        // TODO: After the thread was found, if it exits the code below
+        // may crash. Perhaps we should have a version of find_by_id(),
+        // with_thread_by_id(pid, func), which holds thread_map_mutex while
+        // func runs.
+    }
+    int err = getaffinity(t, cpusetsize, cpuset);
+    if (err) {
+        errno = err;
+        return -1;
     }
     return 0;
 }
@@ -1011,14 +1072,4 @@ int pthread_attr_getaffinity_np(const pthread_attr_t *attr, size_t cpusetsize,
     memcpy(cpuset, a->cpuset, sizeof(cpu_set_t));
 
     return 0;
-}
-
-int sched_getaffinity(pid_t pid, size_t cpusetsize,
-        cpu_set_t *cpuset)
-{
-    if (pid != 0) {
-        WARN_STUBBED();
-        return EINVAL;
-    }
-    return pthread_getaffinity_np(pthread_self(), cpusetsize, cpuset);
 }

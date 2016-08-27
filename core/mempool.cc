@@ -11,7 +11,6 @@
 #include <cassert>
 #include <cstdint>
 #include <new>
-#include <thread>
 #include <boost/utility.hpp>
 #include <string.h>
 #include <lockfree/unordered-queue-mpsc.hh>
@@ -32,7 +31,7 @@
 #include <osv/shrinker.h>
 #include <osv/defer.hh>
 #include <osv/dbg-alloc.hh>
-#include "java/jvm_balloon.hh"
+#include "java/jvm/jvm_balloon.hh"
 #include <boost/dynamic_bitset.hpp>
 #include <boost/lockfree/stack.hpp>
 #include <boost/lockfree/policies.hpp>
@@ -1777,6 +1776,15 @@ void *aligned_alloc(size_t alignment, size_t size)
         return NULL;
     }
     return ret;
+}
+
+// memalign() is an older variant of aligned_alloc(), which does not require
+// that size be a multiple of alignment.
+// memalign() is considered to be an obsolete SunOS-ism, but Linux's glibc
+// supports it, and some applications still use it.
+void *memalign(size_t alignment, size_t size)
+{
+    return aligned_alloc(alignment, size);
 }
 
 namespace memory {

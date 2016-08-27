@@ -11,7 +11,6 @@ from collections import defaultdict
 arch = 'x64'
 build_dir = os.path.dirname(gdb.current_objfile().filename)
 osv_dir = os.path.abspath(os.path.join(build_dir, '../..'))
-mgmt_dir = os.path.join(osv_dir, 'mgmt')
 apps_dir = os.path.join(osv_dir, 'apps')
 external = os.path.join(osv_dir, 'external', arch)
 modules = os.path.join(osv_dir, 'modules')
@@ -120,21 +119,24 @@ def syminfo(addr):
 def translate(path):
     '''given a path, try to find it on the host OS'''
     name = os.path.basename(path)
-    for top in [build_dir, mgmt_dir, external, modules, apps_dir, '/zfs']:
+    for top in [build_dir, external, modules, apps_dir, '/zfs']:
         for root, dirs, files in os.walk(top):
             if name in files:
                 return os.path.join(root, name)
     return None
 
 class Connect(gdb.Command):
-    '''Connect to a local kvm instance at port :1234'''
+    '''Connect to a local kvm instance at given port (default :1234)'''
     def __init__(self):
         gdb.Command.__init__(self,
                              'connect',
                              gdb.COMMAND_NONE,
                              gdb.COMPLETE_NONE)
     def invoke(self, arg, from_tty):
-        gdb.execute('target remote :1234')
+        port = 1234
+        if arg:
+            port = int(arg.split()[0])
+        gdb.execute('target remote :%d' % port)
         global status_enum
         status_enum.running = gdb.parse_and_eval('sched::thread::status::running')
         status_enum.waiting = gdb.parse_and_eval('sched::thread::status::waiting')
@@ -160,6 +162,30 @@ class LogTrace(gdb.Command):
 
 LogTrace()
 
+# Check if given Field has member field called name, i.e., whether
+# using field[name] would work.
+def has_field(field, name):
+    for x in field.type.fields():
+        if x.is_base_class and has_field(x, name):
+            return True
+        if x.name == name:
+            return True
+
+def intrusive_set_root_node(v):
+    if has_field(v, 'parent_'):
+        return v['parent_']
+    elif has_field(v, 'holder'):
+        return v['holder']['root']['parent_']
+    else:
+        return v['tree_']['data_']['node_plus_pred_']['header_plus_size_']['header_']['parent_']
+
+def intrusive_list_root_node(v):
+    a = v['data_']['root_plus_size_']
+    if has_field(a, 'm_header'):
+        return a['m_header']
+    else:
+        return a['root_']
+
 #
 # free_page_ranges generator, use pattern:
 # for range in free_page_ranges():
@@ -184,14 +210,13 @@ def free_page_ranges():
                 yield x
 
     fpr = gdb.lookup_global_symbol('memory::free_page_ranges').value()
-    p = fpr['_free_huge']['tree_']['data_']['node_plus_pred_']
-    node = p['header_plus_size_']['header_']['parent_']
+    node = intrusive_set_root_node(fpr['_free_huge'])
     for x in free_page_ranges_tree(node):
         yield x
 
     for i in range(0, 16):
         free_list = fpr['_free'][i]
-        node = free_list['data_']['root_plus_size_']['root_']
+        node = intrusive_list_root_node(free_list)
         first_addr = node.cast(gdb.lookup_type('void').pointer())
 
         if first_addr == free_list.address:
@@ -211,8 +236,7 @@ def free_page_ranges():
 def vma_list(node=None):
     if node == None:
         fpr = gdb.lookup_global_symbol('mmu::vma_list').value()
-        p = fpr['tree_']['data_']['node_plus_pred_']
-        node = p['header_plus_size_']['header_']['parent_']
+        node = intrusive_set_root_node(fpr)
 
     if node:
         offset = gdb.parse_and_eval("(int)&(('mmu::vma'*)0)->_vma_list_hook")
@@ -605,10 +629,7 @@ class osv_syms(gdb.Command):
                              gdb.COMMAND_USER, gdb.COMPLETE_NONE)
     def invoke(self, arg, from_tty):
         syminfo_resolver.clear_cache()
-        p = gdb.lookup_global_symbol('elf::program::s_objs').value()
-        p = p.dereference().address
-        while p.dereference():
-            obj = p.dereference().dereference()
+        for obj in read_vector(gdb.lookup_global_symbol('elf::program::s_objs').value()):
             base = to_int(obj['_base'])
             obj_path = obj['_pathname']['_M_dataplus']['_M_p'].string()
             path = translate(obj_path)
@@ -617,7 +638,6 @@ class osv_syms(gdb.Command):
             else:
                 print(path, hex(base))
                 load_elf(path, base)
-            p += 1
 
 class osv_load_elf(gdb.Command):
     def __init__(self):
@@ -720,7 +740,7 @@ class intrusive_list:
     def __init__(self, list_ref):
         list_type = list_ref.type.strip_typedefs()
         self.node_type = list_type.template_argument(0)
-        self.root = list_ref['data_']['root_plus_size_']['root_']
+        self.root = intrusive_list_root_node(list_ref)
 
         member_hook = get_template_arg_with_prefix(list_type, "boost::intrusive::member_hook")
         if member_hook:

@@ -84,7 +84,6 @@ extern "C" {
     void premain();
     void vfs_init(void);
     void mount_zfs_rootfs(bool);
-    void ramdisk_init(void);
 }
 
 void premain()
@@ -308,9 +307,6 @@ std::vector<std::vector<std::string> > prepare_commands(int ac, char** av)
 {
     if (ac == 0) {
         puts("This image has an empty command line. Nothing to run.");
-#ifdef AARCH64_PORT_STUB
-        abort(); // a good test for the backtrace code
-#endif
         osv::poweroff();
     }
     std::vector<std::vector<std::string> > commands;
@@ -531,8 +527,8 @@ void main_cont(int ac, char** av)
 
     debug("Firmware vendor: %s\n", osv::firmware_vendor().c_str());
 
-    new elf::program();
-    elf::get_program()->set_search_path({"/", "/usr/lib"});
+    elf::create_main_program();
+
     std::vector<std::vector<std::string> > cmds;
 
     std::tie(ac, av) = parse_options(ac, av);
@@ -571,7 +567,7 @@ void main_cont(int ac, char** av)
 
     vfs_init();
     boot_time.event("VFS initialized");
-    ramdisk_init();
+    //ramdisk_init();
 
     net_init();
     boot_time.event("Network initialized");
